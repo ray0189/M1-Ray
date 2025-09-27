@@ -1,0 +1,51 @@
+name: Build prebuilt BOOTAA64.EFI
+
+on:
+  workflow_dispatch: {}   # run manually from Actions tab
+  push:
+    branches: [ main ]    # also runs on pushes to main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git python3 uuid-dev acpica-tools nasm clang lld
+
+      - name: Tokenize GitHub URLs
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clone AppleWOA Project-Mu
+        run: |
+          git clone https://github.com/AppleWOA/apple_silicon_platforms_mu.git
+          cd apple_silicon_platforms_mu
+
+          # Patch submodule URL (Zeex → kubo fork)
+          sed -i 's|https://github.com/Zeex/subhook.git|https://github.com/kubo/subhook.git|g' MU_BASECORE/.gitmodules || true
+          git submodule sync --recursive
+          git submodule update --init --recursive --jobs 8
+
+      - name: Build BOOTAA64.EFI
+        run: |
+          cd apple_silicon_platforms_mu
+          make -C Platforms/Apple/Silicon
+          mkdir -p ../prebuilt
+          find . -name BOOTAA64.EFI -exec cp {} ../prebuilt/BOOTAA64.EFI \;
+
+      - name: Commit BOOTAA64.EFI back to repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add prebuilt/BOOTAA64.EFI
+          git commit -m "Update prebuilt BOOTAA64.EFI" || echo "No changes"
+          git push
