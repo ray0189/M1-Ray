@@ -22,22 +22,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential git python3 uuid-dev acpica-tools nasm clang lld
 
-      # >>> CRITICAL: make every https://github.com/* use the job token (fixes "could not read Username" for submodules)
+      # Make sure any https://github.com/* submodule pulls use the CI token
       - name: Configure git token for all GitHub clones
         run: |
           git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch AppleWOA Project-Mu (with submodules)
+      - name: Clone AppleWOA Project-Mu (no recurse yet)
         run: |
           set -e
-          git clone --recurse-submodules https://github.com/AppleWOA/apple_silicon_platforms_mu.git
+          git clone https://github.com/AppleWOA/apple_silicon_platforms_mu.git
           cd apple_silicon_platforms_mu
-          # Some repos use nested submodules; make sure everything is initialized with tokenized URL
-          git submodule update --init --recursive
 
-      - name: Build BOOTAA64.EFI (attempt 1)
+          # --- HOT PATCH: fix dead submodule Zeex/subhook to a live fork (kubo/subhook) ---
+          if grep -R "Zeex/subhook.git" -n MU_BASECORE/.gitmodules; then
+            sed -i 's|https://github.com/Zeex/subhook.git|https://github.com/kubo/subhook.git|g' MU_BASECORE/.gitmodules
+          fi
+
+          # sync submodule URLs after the patch
+          git submodule sync --recursive
+
+      - name: Init submodules (recursive)
+        working-directory: apple_silicon_platforms_mu
+        run: |
+          set -e
+          git submodule update --init --recursive --jobs 8
+
+      - name: Build BOOTAA64.EFI (attempt)
         id: build1
         working-directory: apple_silicon_platforms_mu
         continue-on-error: true
@@ -45,7 +57,7 @@ jobs:
           make -C Platforms/Apple/Silicon
           find . -name BOOTAA64.EFI -print -exec cp {} $GITHUB_WORKSPACE/BOOTAA64.EFI \;
 
-      - name: Retry submodules & build (attempt 2)
+      - name: Retry submodules & build (fallback)
         if: steps.build1.outcome != 'success'
         working-directory: apple_silicon_platforms_mu
         run: |
