@@ -18,19 +18,55 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git python3 uuid-dev acpica-tools nasm clang lld
+          sudo apt-get install -y \
+            build-essential git python3 python3-venv python3-pip \
+            uuid-dev nasm clang lld cmake ninja-build
 
-      - name: Fetch AppleWOA Project-Mu
+      - name: Fetch AppleWOA Project-Mu (with submodules)
         run: |
-          git clone https://github.com/AppleWOA/apple_silicon_platforms_mu.git
-          cd apple_silicon_platforms_mu
-          ./setup.sh || true
+          git clone --recursive https://github.com/AppleWOA/apple_silicon_platforms_mu.git
 
-      - name: Build BOOTAA64.EFI
+      - name: Try to build BOOTAA64.EFI (handle multiple layouts)
         working-directory: apple_silicon_platforms_mu
         run: |
-          make -C Platforms/Apple/Silicon
-          find . -name BOOTAA64.EFI -print -exec cp {} $GITHUB_WORKSPACE/BOOTAA64.EFI \;
+          set -e
+          echo "[*] Patching Python venv and installing Mu tools..."
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          # Try to install Mu/edk2 tool extensions if present
+          pip install edk2-pytool-extensions || true
+          if [ -f "pip-requirements.txt" ]; then pip install -r pip-requirements.txt || true; fi
+
+          echo "[*] Attempt 1: Mu 'stuart' build configs"
+          CFG=$(find Platforms -type f -name "Build*.py" -o -name "*Build*.py" 2>/dev/null | head -n1 || true)
+          if [ -n "$CFG" ]; then
+            echo "Found config: $CFG"
+            stuart_update -c "$CFG" || true
+            stuart_build  -c "$CFG" || true
+          else
+            echo "No stuart config found."
+          fi
+
+          echo "[*] Attempt 2: project build scripts"
+          if [ -x "./build.sh" ]; then ./build.sh || true; fi
+          if [ -f "./build.py" ]; then python3 ./build.py || true; fi
+          if [ -f "Platforms/Apple/Silicon/build.py" ]; then python3 Platforms/Apple/Silicon/build.py || true; fi
+
+          echo "[*] Attempt 3: legacy make path"
+          if [ -d "Platforms/Apple/Silicon" ]; then
+            make -C Platforms/Apple/Silicon || true
+          fi
+
+          echo "[*] Locate BOOTAA64.EFI"
+          OUT=$(find . -type f -name "BOOTAA64.EFI" | head -n1 || true)
+          if [ -z "$OUT" ]; then
+            echo "ERROR: BOOTAA64.EFI not found after build attempts."
+            echo "Repo layout may have changed; please open an issue with the build log."
+            exit 2
+          fi
+          echo "Found: $OUT"
+          cp "$OUT" "$GITHUB_WORKSPACE/BOOTAA64.EFI"
 
       - name: Create/Update Latest Release
         uses: softprops/action-gh-release@v2
