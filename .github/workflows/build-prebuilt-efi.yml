@@ -1,9 +1,9 @@
 name: Build prebuilt BOOTAA64.EFI
 
 on:
-  workflow_dispatch: {}   # run manually from Actions tab
+  workflow_dispatch: {}
   push:
-    branches: [ main ]    # also runs on pushes to main
+    branches: [ main ]
 
 permissions:
   contents: write
@@ -30,7 +30,11 @@ jobs:
           git clone https://github.com/AppleWOA/apple_silicon_platforms_mu.git
           cd apple_silicon_platforms_mu
 
-          # Patch submodule URL (Zeex → kubo fork)
+          # init submodules first
+          git submodule sync --recursive
+          git submodule update --init --recursive --jobs 8 || true
+
+          # patch dead submodule URL (Zeex → kubo fork), then re-init
           sed -i 's|https://github.com/Zeex/subhook.git|https://github.com/kubo/subhook.git|g' MU_BASECORE/.gitmodules || true
           git submodule sync --recursive
           git submodule update --init --recursive --jobs 8
