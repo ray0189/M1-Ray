@@ -3,7 +3,7 @@ name: Build BOOTAA64.EFI (Apple Silicon UEFI)
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -14,67 +14,61 @@ jobs:
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential git python3 python3-venv python3-pip \
-            uuid-dev nasm clang lld cmake ninja-build
+          sudo apt-get install -y build-essential git python3 uuid-dev acpica-tools nasm clang lld
+
+      # >>> CRITICAL: make every https://github.com/* use the job token (fixes "could not read Username" for submodules)
+      - name: Configure git token for all GitHub clones
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fetch AppleWOA Project-Mu (with submodules)
         run: |
-          git clone --recursive https://github.com/AppleWOA/apple_silicon_platforms_mu.git
+          set -e
+          git clone --recurse-submodules https://github.com/AppleWOA/apple_silicon_platforms_mu.git
+          cd apple_silicon_platforms_mu
+          # Some repos use nested submodules; make sure everything is initialized with tokenized URL
+          git submodule update --init --recursive
 
-      - name: Try to build BOOTAA64.EFI (handle multiple layouts)
+      - name: Build BOOTAA64.EFI (attempt 1)
+        id: build1
+        working-directory: apple_silicon_platforms_mu
+        continue-on-error: true
+        run: |
+          make -C Platforms/Apple/Silicon
+          find . -name BOOTAA64.EFI -print -exec cp {} $GITHUB_WORKSPACE/BOOTAA64.EFI \;
+
+      - name: Retry submodules & build (attempt 2)
+        if: steps.build1.outcome != 'success'
         working-directory: apple_silicon_platforms_mu
         run: |
-          set -e
-          echo "[*] Patching Python venv and installing Mu tools..."
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          # Try to install Mu/edk2 tool extensions if present
-          pip install edk2-pytool-extensions || true
-          if [ -f "pip-requirements.txt" ]; then pip install -r pip-requirements.txt || true; fi
+          git submodule sync --recursive
+          git submodule update --init --recursive --jobs 8
+          make -C Platforms/Apple/Silicon
+          find . -name BOOTAA64.EFI -print -exec cp {} $GITHUB_WORKSPACE/BOOTAA64.EFI \;
 
-          echo "[*] Attempt 1: Mu 'stuart' build configs"
-          CFG=$(find Platforms -type f -name "Build*.py" -o -name "*Build*.py" 2>/dev/null | head -n1 || true)
-          if [ -n "$CFG" ]; then
-            echo "Found config: $CFG"
-            stuart_update -c "$CFG" || true
-            stuart_build  -c "$CFG" || true
-          else
-            echo "No stuart config found."
-          fi
-
-          echo "[*] Attempt 2: project build scripts"
-          if [ -x "./build.sh" ]; then ./build.sh || true; fi
-          if [ -f "./build.py" ]; then python3 ./build.py || true; fi
-          if [ -f "Platforms/Apple/Silicon/build.py" ]; then python3 Platforms/Apple/Silicon/build.py || true; fi
-
-          echo "[*] Attempt 3: legacy make path"
-          if [ -d "Platforms/Apple/Silicon" ]; then
-            make -C Platforms/Apple/Silicon || true
-          fi
-
-          echo "[*] Locate BOOTAA64.EFI"
-          OUT=$(find . -type f -name "BOOTAA64.EFI" | head -n1 || true)
-          if [ -z "$OUT" ]; then
-            echo "ERROR: BOOTAA64.EFI not found after build attempts."
-            echo "Repo layout may have changed; please open an issue with the build log."
-            exit 2
-          fi
-          echo "Found: $OUT"
-          cp "$OUT" "$GITHUB_WORKSPACE/BOOTAA64.EFI"
-
-      - name: Create/Update Latest Release
+      - name: Ensure Latest Release exists
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest
           draft: false
           prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload BOOTAA64.EFI to Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
           files: BOOTAA64.EFI
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
