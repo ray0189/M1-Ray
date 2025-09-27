@@ -1,0 +1,44 @@
+name: Build BOOTAA64.EFI (Apple Silicon UEFI)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git python3 uuid-dev acpica-tools nasm clang lld
+
+      - name: Fetch AppleWOA Project-Mu
+        run: |
+          git clone https://github.com/AppleWOA/apple_silicon_platforms_mu.git
+          cd apple_silicon_platforms_mu
+          ./setup.sh || true
+
+      - name: Build BOOTAA64.EFI
+        working-directory: apple_silicon_platforms_mu
+        run: |
+          make -C Platforms/Apple/Silicon
+          find . -name BOOTAA64.EFI -print -exec cp {} $GITHUB_WORKSPACE/BOOTAA64.EFI \;
+
+      - name: Create/Update Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest
+          draft: false
+          prerelease: true
+          files: BOOTAA64.EFI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
